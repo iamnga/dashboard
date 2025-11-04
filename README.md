@@ -4,15 +4,31 @@
 
 ## 🚀 Tính năng chính
 
-### 📊 Analytics & Reporting
-- **7 KPI Cards**: Tổng giao dịch, Doanh số, Doanh thu dịch vụ, Tỷ lệ thành công, CASA TB, Khách mới, Thời gian xử lý TB
+### 📊 Analytics & Reporting (v1 + v2)
+- **11 KPI Cards**:
+  - v1: Tổng giao dịch, Doanh số, Doanh thu dịch vụ, Tỷ lệ thành công, Thời gian xử lý TB
+  - **v2 Enhanced**: CASA (avg daily), Tổng khách hàng, TOI (Service), Term Deposit - **với sparklines, WoW/MoM delta, tooltips**
 - **Channel Distribution**: Phân tích theo kênh (IB/MB/API/VA/QR/ERP) với biểu đồ donut
 - **Time Series**: Xu hướng giao dịch theo thời gian với stacked area chart
 - **KPI vs Target**: So sánh thực tế với mục tiêu, highlight trạng thái Above/On/Below
 - **Failure Analysis**: Phân tích lý do lỗi/timeout với gợi ý xử lý
 
+### 👥 Customer Detail (v2 NEW!)
+- **Drawer/Panel**: Slide-in customer detail panel khi click vào công ty
+- **Mini KPIs**: Transactions, Volume, Success Rate, CASA cho từng công ty
+- **Charts**: Channel distribution, Volume trend (30 ngày), Failure analysis
+- **Recent Transactions**: 5 giao dịch gần nhất
+- **Pin/Unpin**: Ghim công ty để giữ khi thay đổi filter
+- **Deep Linking**: URL query param `?company=COMP001` để share trực tiếp
+
+### 📊 Balance & Deposits (v2 NEW!)
+- **Balance Snapshots**: 180 ngày dữ liệu CASA & Term Deposit
+- **CASA Tracking**: Average daily balance với weekly patterns
+- **Term Deposit**: Ending balance và average với growth trends
+- **TOI Net Calculation**: Support cost allocation rate (0-100%)
+
 ### 🎮 Gamification
-- **Leaderboard**: Bảng xếp hạng doanh nghiệp theo volume
+- **Leaderboard**: Bảng xếp hạng doanh nghiệp theo volume (click để xem detail)
 - **Badges**: Gold (top 10%, success > 98%), Silver (top 30%, success > 96%), API Champion (API success > 99% & p95 < 300ms)
 
 ### 📈 Advanced Analytics
@@ -20,6 +36,8 @@
 - **Anomaly Detection**: Phát hiện bất thường với Z-score (threshold: 3σ) cho error rate, timeout rate, latency
 - **API Analytics**: P95/avg latency, success/error rate, top endpoints
 - **ROI Analysis**: Tính toán ROI theo kênh/sản phẩm với revenue, cost, profit
+- **New User Trends** (v2): Track first-time customers by date
+- **Error Trends** (v2): Daily error rate với percentage breakdown
 
 ### 💬 Customer Feedback
 - **NPS Score**: Net Promoter Score với phân loại Promoter/Passive/Detractor
@@ -296,4 +314,203 @@ tsc --noEmit
 **⚠️ Disclaimer**: Đây là ứng dụng demo với dữ liệu giả lập. Tất cả dữ liệu, công ty, và số liệu được tạo ngẫu nhiên và không phản ánh thông tin thực tế của VIB hay bất kỳ tổ chức nào.
 
 **Version**: 1.0.0
+**Last Updated**: November 2025
+
+## 🆕 Version 2 Features (Delta Updates)
+
+### New Data Models
+```typescript
+interface BalanceSnapshot {
+  ts: string;            // YYYY-MM-DD
+  companyId: string;
+  casaDailyAvg: number;  // VND, average daily CASA balance
+  termDepositEnd: number;// VND, end-of-day term deposit balance
+}
+
+interface CompanyFirstSeen {
+  companyId: string;
+  firstTxnDate: string;  // First transaction date
+}
+
+interface CostAllocation {
+  companyId?: string;
+  rate: number;          // 0..1 for TOI net calculation
+}
+```
+
+### Enhanced KPI Cards
+Mỗi KPI card v2 hiển thị:
+- **Value chính** (formatted: currency/number/percentage)
+- **WoW/MoM Delta** với trend indicator (↑/↓)
+- **Sparkline** (7-30 ngày data)
+- **Tooltip** giải thích công thức
+
+```typescript
+// Ví dụ: CASA KPI Card
+{
+  title: "CASA (Average Daily)",
+  value: 25000000000,  // 25B VND
+  delta: {
+    value: 2.5,        // +2.5%
+    period: "WoW",
+    trend: "up"
+  },
+  sparkline: [...],    // 30 days
+  tooltip: "CASA = avg_over_days(casaDailyBalance[day])"
+}
+```
+
+### Business Logic Functions (v2)
+```typescript
+// CASA calculations
+selectCasa(snapshots, companies): {
+  avgDaily: number,
+  total: number,
+  trend: Array<{date, value}>
+}
+
+// TOI with cost allocation
+selectToi(transactions, pricing, allocationRate): {
+  gross: number,
+  net: number,  // = gross - (totalCost * allocationRate)
+  trend: Array<{date, value}>
+}
+
+// Term Deposit
+selectTermDeposit(snapshots, companies): {
+  ending: number,
+  avg: number,
+  trend: Array<{date, value}>
+}
+
+// New user acquisition
+selectNewUserTrend(companyFirstSeen, startDate, endDate): {
+  total: number,
+  trend: Array<{date, value}>
+}
+
+// Error tracking
+selectErrorTrend(transactions): {
+  total: number,
+  errorRate: number,
+  trend: Array<{date, count, rate}>
+}
+```
+
+### Customer Detail Drawer
+
+Được kích hoạt khi:
+- Click vào company trong Leaderboard
+- Click vào company trong bất kỳ bảng nào
+- Deep link: `?company=COMP001`
+
+Hiển thị:
+- Header với company name, pin button, close button
+- 4 mini KPI cards (Transactions, Volume, Success Rate, CASA)
+- Channel distribution pie chart
+- Volume trend line chart (30 ngày)
+- Top 5 failure reasons bar chart
+- 5 recent transactions với status badges
+
+Actions:
+- Pin/Unpin: Giữ company khi thay đổi filter global
+- URL sync: Tự động cập nhật `?company=` param
+
+### Data Generation Improvements
+
+**BalanceSnapshots** (180 days per company):
+- Weekly pattern: CASA giảm 15% vào cuối tuần
+- Monthly growth: 0.5-2% tăng trưởng mỗi tháng
+- Daily variance: ±5% noise
+- Term deposit ổn định hơn: ±2% noise, tăng 0.2-1%/tháng
+
+**CompanyFirstSeen**:
+- Extract từ earliest transaction per company
+- Sử dụng để track new customer acquisition
+- Không dựa vào `customerType=NEW` trong transaction
+
+### Store Actions (v2)
+
+```typescript
+// Select company for detail view
+setSelectedCompany(companyId: string | null)
+
+// Pin/unpin companies
+togglePinCompany(companyId: string)
+
+// Set cost allocation rate for TOI
+setAllocationRate(rate: number)  // 0..1
+```
+
+### Integration Guide
+
+Để sử dụng v2 components trong App.tsx:
+
+```tsx
+import { EnhancedKPICard } from './components/EnhancedKPICard';
+import { CustomerDetailDrawer } from './components/CustomerDetailDrawer';
+import { 
+  selectCasa, selectToi, selectTermDeposit,
+  buildEnhancedKPICard
+} from './utils/businessLogicV2';
+
+// In component:
+const snapshots = useFilteredBalanceSnapshots();
+
+const casaData = selectCasa(snapshots, filters.companies);
+const casaCard = buildEnhancedKPICard(
+  'casa',
+  'CASA (Avg Daily)',
+  casaData.avgDaily,
+  casaData.trend,
+  'currency',
+  'CASA = avg_over_days(casaDailyBalance[day])',
+  'WoW'
+);
+
+// Render:
+<EnhancedKPICard data={casaCard} onClick={() => {/* drill down */}} />
+
+// Add drawer:
+<CustomerDetailDrawer />
+```
+
+### Testing v2 Features
+
+```bash
+# Test balance snapshots generation
+npm run dev
+# Console should show: "✓ Generated 2160 balance snapshots" (12 companies × 180 days)
+
+# Test customer detail
+# 1. Click any company in leaderboard
+# 2. Should open drawer from right
+# 3. URL should update: ?company=COMP001
+# 4. Click Pin button
+# 5. Change global filters
+# 6. Company should stay pinned
+
+# Test enhanced KPI cards
+# 1. Check CASA card shows sparkline
+# 2. Hover tooltip shows formula
+# 3. Delta shows WoW/MoM change with arrow
+```
+
+### Next Steps for Full v2 Integration
+
+Còn cần implement trong App.tsx:
+1. **4 Enhanced KPI Cards** ở hàng đầu (trước existing KPIs)
+2. **Overview Section** với 4 charts:
+   - New User Entry Trend (line chart)
+   - Error Trend (area chart with % overlay)
+   - CASA Trend (area, optional stacked by company)
+   - TOI Trend (line với target line)
+3. **Click handlers** từ Leaderboard → CustomerDetailDrawer
+4. **Cost allocation** slider control (0-20%)
+
+Tất cả components và logic đã sẵn sàng, chỉ cần integrate!
+
+---
+
+**Version**: 2.0.0 (Partial)
 **Last Updated**: November 2025

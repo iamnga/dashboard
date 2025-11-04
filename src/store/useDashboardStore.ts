@@ -35,12 +35,19 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   contractPricing: mockData.contractPricing,
   feedbacks: mockData.feedbacks,
 
+  // v2 Data
+  balanceSnapshots: mockData.balanceSnapshots,
+  companyFirstSeen: mockData.companyFirstSeen,
+  allocationRate: 0, // Default: no cost allocation
+
   // Filters
   filters: getDefaultFilters(),
 
   // UI State
   isLoading: false,
   theme: 'light',
+  selectedCompanyId: null,
+  pinnedCompanies: [],
 
   // Actions
   setFilters: (newFilters: Partial<Filters>) => {
@@ -84,9 +91,40 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         apiMetrics: newData.apiMetrics,
         contractPricing: newData.contractPricing,
         feedbacks: newData.feedbacks,
+        balanceSnapshots: newData.balanceSnapshots,
+        companyFirstSeen: newData.companyFirstSeen,
         isLoading: false,
       });
     }, 1000);
+  },
+
+  setSelectedCompany: (companyId: string | null) => {
+    set({ selectedCompanyId: companyId });
+    // Update URL query param for deep linking
+    if (companyId) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('company', companyId);
+      window.history.pushState({}, '', url);
+    } else {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('company');
+      window.history.pushState({}, '', url);
+    }
+  },
+
+  togglePinCompany: (companyId: string) => {
+    set((state) => {
+      const isPinned = state.pinnedCompanies.includes(companyId);
+      return {
+        pinnedCompanies: isPinned
+          ? state.pinnedCompanies.filter(id => id !== companyId)
+          : [...state.pinnedCompanies, companyId],
+      };
+    });
+  },
+
+  setAllocationRate: (rate: number) => {
+    set({ allocationRate: Math.max(0, Math.min(1, rate)) });
   },
 }));
 
@@ -161,5 +199,27 @@ export const useFilteredApiMetrics = () => {
     const { startDate, endDate } = filters.dateRange;
 
     return metricDate.isBetween(startDate, endDate, 'day', '[]');
+  });
+};
+
+// v2 Selectors
+export const useFilteredBalanceSnapshots = () => {
+  const { balanceSnapshots, filters } = useDashboardStore();
+
+  return balanceSnapshots.filter((snapshot) => {
+    const snapshotDate = dayjs(snapshot.ts);
+    const { startDate, endDate } = filters.dateRange;
+
+    // Date filter
+    if (!snapshotDate.isBetween(startDate, endDate, 'day', '[]')) {
+      return false;
+    }
+
+    // Company filter
+    if (filters.companies.length > 0 && !filters.companies.includes(snapshot.companyId)) {
+      return false;
+    }
+
+    return true;
   });
 };

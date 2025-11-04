@@ -9,6 +9,8 @@ import type {
   Channel,
   Product,
   TransactionStatus,
+  BalanceSnapshot,
+  CompanyFirstSeen,
 } from '../types';
 
 // Constants
@@ -378,6 +380,70 @@ export function generateFeedbacks(companies: Company[]): Feedback[] {
   return feedbacks.sort((a, b) => b.ts.localeCompare(a.ts)); // Most recent first
 }
 
+// Generate Balance Snapshots (v2)
+export function generateBalanceSnapshots(companies: Company[], days: number = 180): BalanceSnapshot[] {
+  const snapshots: BalanceSnapshot[] = [];
+  const endDate = dayjs();
+  const startDate = endDate.subtract(days, 'day');
+
+  companies.forEach(company => {
+    // Base CASA and Term Deposit for this company
+    const baseCasa = company.casaAvg;
+    const baseTermDeposit = baseCasa * randomFloat(0.5, 1.5);
+
+    for (let day = 0; day <= days; day++) {
+      const date = startDate.add(day, 'day');
+
+      // Add some variance and trends
+      // CASA has weekly pattern (lower on weekends)
+      const dayOfWeek = date.day();
+      const weekendFactor = (dayOfWeek === 0 || dayOfWeek === 6) ? 0.85 : 1.0;
+
+      // Add monthly growth trend (0-2% per month)
+      const monthsElapsed = day / 30;
+      const growthFactor = 1 + (monthsElapsed * randomFloat(0.005, 0.02));
+
+      // Add daily noise
+      const dailyNoise = randomFloat(0.95, 1.05);
+
+      const casaDailyAvg = Math.round(baseCasa * weekendFactor * growthFactor * dailyNoise);
+
+      // Term deposit grows slower, less volatile
+      const termDepositNoise = randomFloat(0.98, 1.02);
+      const termGrowthFactor = 1 + (monthsElapsed * randomFloat(0.002, 0.01));
+      const termDepositEnd = Math.round(baseTermDeposit * termGrowthFactor * termDepositNoise);
+
+      snapshots.push({
+        ts: date.format('YYYY-MM-DD'),
+        companyId: company.id,
+        casaDailyAvg,
+        termDepositEnd,
+      });
+    }
+  });
+
+  return snapshots.sort((a, b) => a.ts.localeCompare(b.ts));
+}
+
+// Generate Company First Seen (v2)
+export function generateCompanyFirstSeen(transactions: Transaction[]): CompanyFirstSeen[] {
+  const firstSeenMap = new Map<string, string>();
+
+  transactions.forEach(txn => {
+    const companyId = txn.companyId;
+    const txnDate = dayjs(txn.ts).format('YYYY-MM-DD');
+
+    if (!firstSeenMap.has(companyId) || txnDate < firstSeenMap.get(companyId)!) {
+      firstSeenMap.set(companyId, txnDate);
+    }
+  });
+
+  return Array.from(firstSeenMap.entries()).map(([companyId, firstTxnDate]) => ({
+    companyId,
+    firstTxnDate,
+  })).sort((a, b) => a.firstTxnDate.localeCompare(b.firstTxnDate));
+}
+
 // Generate all mock data
 export function generateAllMockData() {
   console.log('Generating mock data...');
@@ -400,6 +466,12 @@ export function generateAllMockData() {
   const feedbacks = generateFeedbacks(companies);
   console.log(`✓ Generated ${feedbacks.length} feedbacks`);
 
+  const balanceSnapshots = generateBalanceSnapshots(companies, 180);
+  console.log(`✓ Generated ${balanceSnapshots.length} balance snapshots`);
+
+  const companyFirstSeen = generateCompanyFirstSeen(transactions);
+  console.log(`✓ Generated ${companyFirstSeen.length} company first seen records`);
+
   return {
     companies,
     transactions,
@@ -407,5 +479,7 @@ export function generateAllMockData() {
     apiMetrics,
     contractPricing,
     feedbacks,
+    balanceSnapshots,
+    companyFirstSeen,
   };
 }

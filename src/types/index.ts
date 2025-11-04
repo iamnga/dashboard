@@ -70,6 +70,25 @@ export interface Feedback {
   product?: Product;
 }
 
+// ============= NEW v2 Types =============
+
+export interface BalanceSnapshot {
+  ts: string;            // YYYY-MM-DD
+  companyId: string;
+  casaDailyAvg: number;  // VND, average daily CASA balance
+  termDepositEnd: number;// VND, end-of-day term deposit balance
+}
+
+export interface CompanyFirstSeen {
+  companyId: string;
+  firstTxnDate: string;  // YYYY-MM-DD - first transaction date
+}
+
+export interface CostAllocation {
+  companyId?: string;    // If undefined, applies globally
+  rate: number;          // 0..1 - allocation rate for TOI calculation
+}
+
 // Computed/Derived Types
 export interface KPICard {
   id: string;
@@ -79,6 +98,20 @@ export interface KPICard {
   trend?: "up" | "down" | "neutral";
   icon?: string;
   format?: "number" | "currency" | "percentage" | "duration";
+}
+
+export interface EnhancedKPICard {
+  id: string;
+  title: string;
+  value: number;
+  delta: {
+    value: number;       // Percentage change
+    period: "WoW" | "MoM";
+    trend: "up" | "down" | "neutral";
+  };
+  sparkline: { date: string; value: number }[];  // Last 7-30 days
+  format: "number" | "currency" | "percentage" | "duration";
+  tooltip?: string;      // Description of formula
 }
 
 export interface ChannelDistribution {
@@ -215,12 +248,19 @@ export interface DashboardState {
   contractPricing: ContractPricing[];
   feedbacks: Feedback[];
 
+  // v2 Data
+  balanceSnapshots: BalanceSnapshot[];
+  companyFirstSeen: CompanyFirstSeen[];
+  allocationRate: number;  // Global cost allocation rate (0..1)
+
   // Filters
   filters: Filters;
 
   // UI State
   isLoading: boolean;
   theme: "light" | "dark";
+  selectedCompanyId: string | null;  // For Customer Detail drawer
+  pinnedCompanies: string[];         // Pinned companies
 
   // Actions
   setFilters: (filters: Partial<Filters>) => void;
@@ -228,4 +268,7 @@ export interface DashboardState {
   setTheme: (theme: "light" | "dark") => void;
   toggleTheme: () => void;
   refreshData: () => void;
+  setSelectedCompany: (companyId: string | null) => void;
+  togglePinCompany: (companyId: string) => void;
+  setAllocationRate: (rate: number) => void;
 }

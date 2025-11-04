@@ -1,10 +1,9 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import dayjs from 'dayjs';
 import {
-  TrendingUp, DollarSign, Activity,
-  Award, AlertTriangle, BarChart3, Download,
-  RefreshCw, Sun, Moon, Filter, ChevronDown, Crown,
-  Medal, Trophy, Star
+  TrendingUp, DollarSign, Activity, Award, AlertTriangle, BarChart3,
+  Download, RefreshCw, Sun, Moon, Filter, ChevronDown, Crown, Medal,
+  Trophy, Star, Users, Landmark, AlertCircle, Settings
 } from 'lucide-react';
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie,
@@ -12,7 +11,12 @@ import {
 } from 'recharts';
 import { motion } from 'framer-motion';
 
-import { useDashboardStore, useFilteredTransactions, useFilteredFeedbacks } from './store/useDashboardStore';
+import {
+  useDashboardStore,
+  useFilteredTransactions,
+  useFilteredFeedbacks,
+  useFilteredBalanceSnapshots
+} from './store/useDashboardStore';
 import {
   calculateTotalTransactions, calculateTotalVolume, calculateTotalRevenue,
   calculateUniqueCustomers, calculateNewCustomers, calculateAverageCASA,
@@ -20,22 +24,44 @@ import {
   calculateLeaderboard, detectAnomalies, forecastTimeSeries, analyzeFailures,
   calculateROI
 } from './utils/businessLogic';
+import {
+  selectCasa, selectToi, selectTermDeposit, selectNewUserTrend,
+  selectErrorTrend, buildEnhancedKPICard
+} from './utils/businessLogicV2';
 import { formatCurrency, formatNumber, formatPercentage, formatDuration, getChannelColor, getBadgeColor } from './lib/utils';
 import { exportToCSV } from './utils/export';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card';
 import { Button } from './components/ui/button';
 import { Badge } from './components/ui/badge';
+import { EnhancedKPICard } from './components/EnhancedKPICard';
+import { CustomerDetailDrawer } from './components/CustomerDetailDrawer';
 
 import type { Channel } from './types';
 
 function App() {
-  const { filters, setFilters, resetFilters, theme, toggleTheme, companies, contractPricing } = useDashboardStore();
+  const {
+    filters, setFilters, resetFilters, theme, toggleTheme, companies,
+    contractPricing, companyFirstSeen, allocationRate, setAllocationRate,
+    setSelectedCompany, selectedCompanyId
+  } = useDashboardStore();
+
   const transactions = useFilteredTransactions();
   const feedbacks = useFilteredFeedbacks();
+  const snapshots = useFilteredBalanceSnapshots();
 
   const [showFilters, setShowFilters] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
-  // ============= KPI Calculations =============
+  // Load company from URL on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const companyId = params.get('company');
+    if (companyId) {
+      setSelectedCompany(companyId);
+    }
+  }, [setSelectedCompany]);
+
+  // ============= KPI Calculations (v1) =============
   const kpis = useMemo(() => {
     const totalTxn = calculateTotalTransactions(transactions);
     const totalVolume = calculateTotalVolume(transactions);
@@ -58,6 +84,85 @@ function App() {
       avgProcessTime,
     };
   }, [transactions, companies]);
+
+  // ============= Enhanced KPI Calculations (v2) =============
+  const enhancedKPIs = useMemo(() => {
+    // Get trend data for sparklines
+    const casaData = selectCasa(snapshots, filters.companies);
+    const toiData = selectToi(transactions, contractPricing, allocationRate);
+    const termDepositData = selectTermDeposit(snapshots, filters.companies);
+
+    // Build customer trend
+    const customerTrend = (() => {
+      const byDate = new Map<string, Set<string>>();
+      transactions.forEach(txn => {
+        const date = dayjs(txn.ts).format('YYYY-MM-DD');
+        if (!byDate.has(date)) {
+          byDate.set(date, new Set());
+        }
+        byDate.get(date)!.add(txn.companyId);
+      });
+      return Array.from(byDate.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, companies]) => ({ date, value: companies.size }));
+    })();
+
+    return {
+      casa: buildEnhancedKPICard(
+        'casa',
+        'CASA (Avg Daily)',
+        casaData.avgDaily,
+        casaData.trend,
+        'currency',
+        'Average daily CASA balance across selected period and companies',
+        'WoW'
+      ),
+      customers: buildEnhancedKPICard(
+        'customers',
+        'Total Customers',
+        kpis.uniqueCustomers,
+        customerTrend,
+        'number',
+        'Count of unique companies with transactions in selected period',
+        'MoM'
+      ),
+      toi: buildEnhancedKPICard(
+        'toi',
+        `TOI (Net ${formatNumber(allocationRate * 100, 0)}%)`,
+        toiData.net,
+        toiData.trend,
+        'currency',
+        `Total Operating Income = Fees - (Ops Cost × ${formatNumber(allocationRate * 100, 0)}%)`,
+        'WoW'
+      ),
+      termDeposit: buildEnhancedKPICard(
+        'termDeposit',
+        'Term Deposit (End)',
+        termDepositData.ending,
+        termDepositData.trend,
+        'currency',
+        'End-of-period Term Deposit balance',
+        'MoM'
+      ),
+    };
+  }, [snapshots, transactions, contractPricing, allocationRate, filters.companies, kpis.uniqueCustomers]);
+
+  // ============= Overview Trends (v2) =============
+  const overviewTrends = useMemo(() => {
+    const { startDate, endDate } = filters.dateRange;
+
+    const newUserTrend = selectNewUserTrend(companyFirstSeen, startDate, endDate);
+    const errorTrend = selectErrorTrend(transactions);
+    const casaData = selectCasa(snapshots, filters.companies);
+    const toiData = selectToi(transactions, contractPricing, allocationRate);
+
+    return {
+      newUser: newUserTrend.trend.slice(-30).map(t => ({ date: dayjs(t.date).format('MM/DD'), value: t.value })),
+      error: errorTrend.trend.slice(-30).map(t => ({ date: dayjs(t.date).format('MM/DD'), count: t.count, rate: t.rate })),
+      casa: casaData.trend.slice(-30).map(t => ({ date: dayjs(t.date).format('MM/DD'), value: t.value })),
+      toi: toiData.trend.slice(-30).map(t => ({ date: dayjs(t.date).format('MM/DD'), value: t.value })),
+    };
+  }, [filters.dateRange, companyFirstSeen, transactions, snapshots, contractPricing, allocationRate, filters.companies]);
 
   // ============= Channel Distribution =============
   const channelData = useMemo(() => {
@@ -133,20 +238,7 @@ function App() {
     return calculateROI(transactions, contractPricing, 'channel').slice(0, 6);
   }, [transactions, contractPricing]);
 
-  // ============= Status Distribution =============
-  // const statusData = useMemo(() => {
-  //   const statusMap = new Map<string, number>();
-  //   transactions.forEach(txn => {
-  //     statusMap.set(txn.status, (statusMap.get(txn.status) || 0) + 1);
-  //   });
-  //   return Array.from(statusMap.entries()).map(([status, count]) => ({
-  //     name: status,
-  //     value: count,
-  //     color: getStatusColor(status),
-  //   }));
-  // }, [transactions]);
-
-  // ============= API Metrics (simulated from transactions) =============
+  // ============= API Metrics =============
   const apiMetrics = useMemo(() => {
     const apiTxns = transactions.filter(txn => txn.channel === 'API');
     const endpoints = new Map<string, { total: number; success: number; latencies: number[] }>();
@@ -235,8 +327,8 @@ function App() {
               VIB
             </div>
             <div>
-              <h1 className="text-xl font-bold">Digital Banking Dashboard</h1>
-              <p className="text-xs text-muted-foreground">Transaction Analytics</p>
+              <h1 className="text-xl font-bold">Digital Banking Dashboard v2</h1>
+              <p className="text-xs text-muted-foreground">Transaction Analytics with Enhanced KPIs</p>
             </div>
           </div>
 
@@ -245,6 +337,10 @@ function App() {
               <Filter className="h-4 w-4 mr-2" />
               Filters
               <ChevronDown className="h-4 w-4 ml-2" />
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setShowSettings(!showSettings)}>
+              <Settings className="h-4 w-4 mr-2" />
+              Settings
             </Button>
             <Button variant="outline" size="sm" onClick={() => useDashboardStore.getState().refreshData()}>
               <RefreshCw className="h-4 w-4 mr-2" />
@@ -293,64 +389,216 @@ function App() {
             </div>
           </motion.div>
         )}
+
+        {/* Settings Panel */}
+        {showSettings && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="border-t bg-muted/50 px-4 py-3"
+          >
+            <div className="container space-y-3">
+              <div>
+                <label className="text-sm font-medium mb-2 block">
+                  Cost Allocation Rate for TOI: {formatNumber(allocationRate * 100, 0)}%
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="20"
+                  step="1"
+                  value={allocationRate * 100}
+                  onChange={(e) => setAllocationRate(parseFloat(e.target.value) / 100)}
+                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  TOI Net = Gross Fees - (Operational Costs × {formatNumber(allocationRate * 100, 0)}%)
+                </p>
+              </div>
+            </div>
+          </motion.div>
+        )}
       </header>
 
       {/* Main Content */}
       <main className="container px-4 py-6 space-y-6">
-        {/* KPI Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Transactions</CardTitle>
-              <BarChart3 className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{formatNumber(kpis.totalTxn)}</div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {kpis.newCustomers} new customers
-              </p>
-            </CardContent>
-          </Card>
+        {/* Enhanced KPI Cards v2 */}
+        <section>
+          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+            <Landmark className="h-5 w-5" />
+            Core Banking Metrics (Enhanced)
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <EnhancedKPICard data={enhancedKPIs.casa} />
+            <EnhancedKPICard data={enhancedKPIs.customers} />
+            <EnhancedKPICard data={enhancedKPIs.toi} />
+            <EnhancedKPICard data={enhancedKPIs.termDeposit} />
+          </div>
+        </section>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Volume</CardTitle>
-              <DollarSign className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{formatCurrency(kpis.totalVolume)}</div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Avg CASA: {formatCurrency(kpis.avgCASA)}
-              </p>
-            </CardContent>
-          </Card>
+        {/* Overview Trends Section v2 */}
+        <section>
+          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+            <TrendingUp className="h-5 w-5" />
+            Overview Trends
+          </h2>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* New User Entry Trend */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="h-5 w-5" />
+                  New Customer Acquisition
+                </CardTitle>
+                <CardDescription>First-time customers per day</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={200}>
+                  <LineChart data={overviewTrends.newUser}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" />
+                    <YAxis />
+                    <Tooltip />
+                    <Line type="monotone" dataKey="value" stroke="#43A047" strokeWidth={2} name="New Customers" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Service Revenue</CardTitle>
-              <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{formatCurrency(kpis.totalRevenue)}</div>
-              <p className="text-xs text-muted-foreground mt-1">
-                From {kpis.uniqueCustomers} customers
-              </p>
-            </CardContent>
-          </Card>
+            {/* Error Trend */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <AlertCircle className="h-5 w-5 text-red-500" />
+                  Error Rate Trend
+                </CardTitle>
+                <CardDescription>Failed + Timeout transactions</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={200}>
+                  <AreaChart data={overviewTrends.error}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" />
+                    <YAxis yAxisId="left" />
+                    <YAxis yAxisId="right" orientation="right" />
+                    <Tooltip
+                      formatter={(value: number, name: string) => {
+                        if (name === 'count') return [formatNumber(value), 'Error Count'];
+                        if (name === 'rate') return [formatPercentage(value), 'Error Rate'];
+                        return [value, name];
+                      }}
+                    />
+                    <Area yAxisId="left" type="monotone" dataKey="count" fill="#ef4444" stroke="#dc2626" fillOpacity={0.6} name="count" />
+                    <Line yAxisId="right" type="monotone" dataKey="rate" stroke="#f59e0b" strokeWidth={2} name="rate" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Success Rate</CardTitle>
-              <Activity className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{formatPercentage(kpis.successRate)}</div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Avg time: {formatDuration(kpis.avgProcessTime)}
-              </p>
-            </CardContent>
-          </Card>
-        </div>
+            {/* CASA Trend */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Landmark className="h-5 w-5 text-blue-500" />
+                  CASA Balance Trend
+                </CardTitle>
+                <CardDescription>Average daily CASA over time</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={200}>
+                  <AreaChart data={overviewTrends.casa}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" />
+                    <YAxis tickFormatter={(value) => formatCurrency(value)} />
+                    <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                    <Area type="monotone" dataKey="value" fill="#1E88E5" stroke="#1565C0" fillOpacity={0.6} name="CASA" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            {/* TOI Trend */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <DollarSign className="h-5 w-5 text-green-500" />
+                  TOI (Service Revenue) Trend
+                </CardTitle>
+                <CardDescription>Total Operating Income over time</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={200}>
+                  <LineChart data={overviewTrends.toi}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" />
+                    <YAxis tickFormatter={(value) => formatCurrency(value)} />
+                    <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                    <Line type="monotone" dataKey="value" stroke="#10b981" strokeWidth={2} name="TOI Net" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </div>
+        </section>
+
+        {/* Traditional KPI Cards v1 */}
+        <section>
+          <h2 className="text-lg font-semibold mb-4">Transaction Metrics</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Total Transactions</CardTitle>
+                <BarChart3 className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{formatNumber(kpis.totalTxn)}</div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {kpis.newCustomers} new customers
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Total Volume</CardTitle>
+                <DollarSign className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{formatCurrency(kpis.totalVolume)}</div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Avg CASA: {formatCurrency(kpis.avgCASA)}
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Service Revenue</CardTitle>
+                <TrendingUp className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{formatCurrency(kpis.totalRevenue)}</div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  From {kpis.uniqueCustomers} customers
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Success Rate</CardTitle>
+                <Activity className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{formatPercentage(kpis.successRate)}</div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Avg time: {formatDuration(kpis.avgProcessTime)}
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        </section>
 
         {/* Anomaly Alerts */}
         {anomalies.length > 0 && (
@@ -456,12 +704,16 @@ function App() {
                 <Trophy className="h-5 w-5 text-amber-500" />
                 Leaderboard & Gamification
               </CardTitle>
-              <CardDescription>Top performing companies</CardDescription>
+              <CardDescription>Top performing companies (Click for details)</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
                 {leaderboard.map((entry) => (
-                  <div key={entry.companyId} className="flex items-center gap-3 p-3 rounded-lg hover:bg-muted/50 transition-colors">
+                  <div
+                    key={entry.companyId}
+                    className="flex items-center gap-3 p-3 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
+                    onClick={() => setSelectedCompany(entry.companyId)}
+                  >
                     <div className="flex items-center justify-center w-8 h-8 rounded-full bg-muted font-bold text-sm">
                       {entry.rank}
                     </div>
@@ -685,10 +937,16 @@ function App() {
 
         {/* Footer */}
         <footer className="text-center text-xs text-muted-foreground py-6 border-t">
-          <p>VIB Digital Banking Dashboard v1.0.0 • Demo Application with Mock Data</p>
+          <p>VIB Digital Banking Dashboard v2.0.0 • Demo Application with Mock Data</p>
           <p className="mt-1">⚠️ All data is simulated for demonstration purposes only</p>
+          <p className="mt-1">
+            ✨ New in v2: Enhanced KPIs with sparklines, Customer Detail drawer, Balance snapshots, Overview trends
+          </p>
         </footer>
       </main>
+
+      {/* Customer Detail Drawer */}
+      {selectedCompanyId && <CustomerDetailDrawer />}
     </div>
   );
 }
